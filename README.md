@@ -26,6 +26,10 @@ dezelfde container wel.
 gesaneerd naar ASCII zonder padscheiders en krijgt altijd de extensie `.pdf`. Ontbreekt hij of
 blijft er na sanering niets over, dan heet het bestand `document.pdf`.
 
+**`naam` is een geaccepteerd alias van `bestandsnaam`.** De n8n-workflows (CV Wizard) sturen
+dat veld; zonder de alias zouden zij stil hun bestandsnaam verliezen. Komen beide velden mee,
+dan wint `bestandsnaam`.
+
 | Status | Wanneer |
 |---|---|
 | `400` | `html` ontbreekt of is leeg · body is geen geldige JSON |
