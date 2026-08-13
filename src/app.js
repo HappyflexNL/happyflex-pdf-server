@@ -70,7 +70,10 @@ function createApp({ config, browserManager, logger = console }) {
       return fout(res, 503, 'overloaded', 'Renderservice zit aan zijn gelijktijdigheidslimiet.');
     }
 
-    const { html, bestandsnaam } = req.body ?? {};
+    // `naam` is de legacy-veldnaam uit de n8n-workflows (CV Wizard). Die blijven werken;
+    // `bestandsnaam` wint wanneer beide meekomen. Zonder deze alias zouden bestaande
+    // aanroepers stil hun bestandsnaam verliezen: CV_<naam>.pdf zou document.pdf worden.
+    const { html, bestandsnaam, naam: legacyNaam } = req.body ?? {};
     if (typeof html !== 'string' || html.trim() === '') {
       return fout(res, 400, 'invalid_request', 'Veld "html" is verplicht en moet een niet-lege string zijn.');
     }
@@ -88,7 +91,7 @@ function createApp({ config, browserManager, logger = console }) {
     const start = Date.now();
     try {
       const pdf = await renderPdf(browser, html, { timeoutMs: config.renderTimeoutMs });
-      const naam = veiligeBestandsnaam(bestandsnaam);
+      const naam = veiligeBestandsnaam(bestandsnaam ?? legacyNaam);
 
       stats.totaal += 1;
       logger.info?.(`200 ${requestId} — ${pdf.length} bytes in ${Date.now() - start} ms`);

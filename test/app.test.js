@@ -21,7 +21,25 @@ function nepBrowserManager({ ok = true, rendert = true } = {}) {
     },
     get() {
       if (!rendert) throw Object.assign(new Error('browser niet beschikbaar'), { code: 'BROWSER_UNAVAILABLE' });
-      return { async newPage() { throw new Error('niet gebruikt in deze test'); } };
+      return nepBrowser();
+    },
+  };
+}
+
+/** Genoeg van het puppeteer-oppervlak om renderPdf echt te laten lopen, zonder Chromium. */
+function nepBrowser() {
+  const page = {
+    setDefaultTimeout() {},
+    setDefaultNavigationTimeout() {},
+    async setContent() {},
+    async evaluate() {},
+    async pdf() {
+      return Buffer.from('%PDF-1.4\nnep\n%%EOF\n');
+    },
+  };
+  return {
+    async createBrowserContext() {
+      return { async newPage() { return page; }, async close() {} };
     },
   };
 }
@@ -151,4 +169,39 @@ test('een onbekend eindpunt geeft 404 achter auth', async () => {
     const res = await fetch(`${basis}/bestaat-niet`, { headers: { 'x-render-token': TOKEN } });
     assert.equal(res.status, 404);
   });
+});
+
+// ── Legacy-veld `naam` ────────────────────────────────────────────────────────
+// De n8n-workflows (CV Wizard) sturen `naam`, niet `bestandsnaam`. Die aanroepers
+// mogen bij de omslag niet stil hun bestandsnaam verliezen.
+
+async function dispositionVoor(body) {
+  return metServer(nepBrowserManager(), async (basis) => {
+    const res = await fetch(`${basis}/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-render-token': TOKEN },
+      body: JSON.stringify(body),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'application/pdf');
+    return res.headers.get('content-disposition');
+  });
+}
+
+test('legacy `naam` bepaalt de bestandsnaam', async () => {
+  assert.match(await dispositionVoor({ html: '<p>x</p>', naam: 'Jan Jansen' }), /filename="Jan_Jansen\.pdf"/);
+});
+
+test('`bestandsnaam` wint wanneer beide velden meekomen', async () => {
+  const cd = await dispositionVoor({ html: '<p>x</p>', bestandsnaam: 'Nieuw', naam: 'Oud' });
+  assert.match(cd, /filename="Nieuw\.pdf"/);
+  assert.ok(!cd.includes('Oud'));
+});
+
+test('zonder beide velden blijft het document.pdf', async () => {
+  assert.match(await dispositionVoor({ html: '<p>x</p>' }), /filename="document\.pdf"/);
+});
+
+test('legacy `naam` wordt net zo gesaneerd als bestandsnaam', async () => {
+  assert.match(await dispositionVoor({ html: '<p>x</p>', naam: '../../etc/passwd' }), /filename="etcpasswd\.pdf"/);
 });
