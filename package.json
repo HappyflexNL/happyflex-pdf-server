@@ -1,9 +1,18 @@
 {
   "name": "happyflex-pdf-server",
   "version": "1.0.0",
+  "private": true,
+  "description": "Interne renderservice voor happyflex-app: HTML in, A4-PDF uit.",
   "main": "pdf-server.js",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "start": "node pdf-server.js",
+    "test": "node --test test/*.test.js"
+  },
   "dependencies": {
-    "express": "^4.18.2",
-    "puppeteer": "^21.0.0"
+    "express": "4.22.2",
+    "puppeteer": "25.6.0"
   }
 }
