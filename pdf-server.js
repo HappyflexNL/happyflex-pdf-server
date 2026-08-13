@@ -1,26 +1,47 @@
-const express = require('express');
-const puppeteer = require('puppeteer');
+'use strict';
 
-const app = express();
-app.use(express.json({ limit: '10mb' }));
+const { loadConfig } = require('./src/config');
+const { BrowserManager } = require('./src/browser');
+const { createApp } = require('./src/app');
 
-app.post('/generate', async (req, res) => {
-  try {
-    const { html, naam } = req.body;
-    const browser = await puppeteer.launch({
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+async function main() {
+  // Deugt de env niet, dan stopt het hier — niet pas bij het eerste request.
+  const config = loadConfig();
+
+  const browserManager = new BrowserManager({ logger: console });
+  await browserManager.start();
+
+  const app = createApp({ config, browserManager, logger: console });
+  const server = app.listen(config.port, () => {
+    console.info(
+      `renderservice luistert op poort ${config.port} ` +
+        `(max ${config.maxConcurrentRenders} gelijktijdige renders, timeout ${config.renderTimeoutMs} ms)`,
+    );
+  });
+
+  let afsluiten = false;
+  for (const signaal of ['SIGTERM', 'SIGINT']) {
+    process.on(signaal, () => {
+      if (afsluiten) return;
+      afsluiten = true;
+      console.info(`${signaal} ontvangen — service sluit af`);
+
+      const harde = setTimeout(() => {
+        console.error('afsluiten duurde te lang — hard afbreken');
+        process.exit(1);
+      }, config.shutdownGraceMs);
+      harde.unref();
+
+      server.close(async () => {
+        await browserManager.stop();
+        clearTimeout(harde);
+        process.exit(0);
+      });
     });
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
-    const pdf = await page.pdf({ format: 'A4', printBackground: true });
-    await browser.close();
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=CV_${naam}.pdf`);
-    res.send(pdf);
-  } catch (error) {
-    console.error(error);
-    res.status(500).send('Fout bij genereren PDF');
   }
-});
+}
 
-app.listen(3000, () => console.log('PDF server draait op port 3000'));
+main().catch((error) => {
+  console.error(`service kon niet starten: ${error.message}`);
+  process.exit(1);
+});
