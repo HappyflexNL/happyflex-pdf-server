@@ -4,7 +4,7 @@
 //
 //   node scripts/acceptance.mjs
 //
-// Vereist: pdftotext (poppler) op PATH, en een Chrome die puppeteer kan vinden.
+// Vereist: pdftotext + pdfinfo (poppler) op PATH, en een Chrome die puppeteer kan vinden.
 
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
@@ -204,6 +204,104 @@ async function main() {
 
   const geenHtml = await genereer({ body: { bestandsnaam: 'leeg' } });
   meld('5c. Ontbrekende html → 400', geenHtml.status === 400, `status=${geenHtml.status}`);
+
+  // ── 6. D-10 — per-pagina cumulatieve hoeveelheidsregel ────────────────────
+  // Opt-in via `data-hf-paginacumulatief` (zie src/paginacumulatief.js). Bewijst wat de
+  // vervolgbriefing eist: een render van drie pagina's, ÉN een render waarin een regel over twee
+  // tekstregels wrapt — in beide moet de cumulatieve telling kloppen en "Over te brengen" precies
+  // op alle-behalve-de-laatste pagina staan.
+  function d10Fixture(aantalRijen, { wrapRijIndex = -1 } = {}) {
+    const rijen = Array.from({ length: aantalRijen }, (_, i) => {
+      const omschrijving =
+        i === wrapRijIndex
+          ? 'Extreem lange omschrijving die beslist niet op één regel past in deze kolom en dus over twee tekstregels moet wrappen'
+          : `Rij ${i + 1}`;
+      return `<tr data-hf-aantal="1"><td>1</td><td>uur</td><td>${omschrijving}</td></tr>`;
+    }).join('\n');
+    return `<!doctype html><html><head><style>
+@page { size: A4; margin: 20mm; }
+body { margin: 0; font-family: Arial, sans-serif; font-size: 9pt; }
+table.regeltabel { width: 100%; border-collapse: collapse; }
+table.regeltabel thead { display: table-header-group; }
+table.regeltabel thead th { text-align: left; padding: 0 3mm 1.5mm 0; border-bottom: 1px solid #000; }
+table.regeltabel tbody td { padding: 1.4mm 3mm 1.4mm 0; border-bottom: 1px solid #ccc; vertical-align: top; }
+table.regeltabel tbody tr { break-inside: avoid; }
+table.regeltabel tfoot td { padding: 1.6mm 3mm 0 0; }
+</style></head><body>
+<table class="regeltabel" data-hf-paginacumulatief>
+<thead><tr><th>Aantal</th><th>Eenheid</th><th>Omschrijving</th></tr></thead>
+<tbody>
+${rijen}
+</tbody>
+<tfoot><tr data-hf-cumulatief-kolom="0" data-hf-label-kolom="2" data-hf-label="Over te brengen"><td>0</td><td>uren</td><td></td></tr></tfoot>
+</table>
+</body></html>`;
+  }
+
+  async function d10PerPaginaTekst(html, verwachtAantalPaginas) {
+    const res = await genereer({ body: { html } });
+    if (res.status !== 200) throw new Error(`D-10-fixture gaf ${res.status} i.p.v. 200`);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    const pdfPad = join(werkmap, `d10-${Date.now()}.pdf`);
+    writeFileSync(pdfPad, bytes);
+    const werkelijkAantalPaginas = Number(
+      execFileSync('pdfinfo', [pdfPad]).toString().match(/^Pages:\s+(\d+)/m)?.[1] ?? -1,
+    );
+    if (werkelijkAantalPaginas !== verwachtAantalPaginas) {
+      return { werkelijkAantalPaginas, paginas: [] };
+    }
+    const paginas = [];
+    for (let p = 1; p <= werkelijkAantalPaginas; p += 1) {
+      paginas.push(execFileSync('pdftotext', ['-f', String(p), '-l', String(p), '-layout', pdfPad, '-']).toString());
+    }
+    return { werkelijkAantalPaginas, paginas };
+  }
+
+  // 90 rijen van aantal=1 geven op dit fixtureformaat betrouwbaar drie pagina's (leeg-geverifieerd).
+  const driePaginas = await d10PerPaginaTekst(d10Fixture(90), 3);
+  const getalOpPagina = (tekst) => Number([...tekst.matchAll(/\b(\d+)\s+uren\b/g)].map((m) => m[1]).pop());
+  meld(
+    '6a. Drie pagina\'s: exact drie PDF-pagina\'s',
+    driePaginas.werkelijkAantalPaginas === 3,
+    `werkelijk aantal pagina's=${driePaginas.werkelijkAantalPaginas}`,
+  );
+  if (driePaginas.paginas.length === 3) {
+    const [g1, g2, g3] = driePaginas.paginas.map(getalOpPagina);
+    meld(
+      '6b. Cumulatief loopt op tot en met het eindtotaal (90), niet per pagina opnieuw bij nul',
+      g1 > 0 && g2 > g1 && g3 === 90,
+      `pagina 1=${g1} pagina 2=${g2} pagina 3=${g3} (verwacht: oplopend, laatste=90)`,
+    );
+    meld(
+      '6c. "Over te brengen" staat op elke pagina behalve de laatste — één gedrag, geen uitzondering',
+      driePaginas.paginas[0].includes('Over te brengen') &&
+        driePaginas.paginas[1].includes('Over te brengen') &&
+        !driePaginas.paginas[2].includes('Over te brengen'),
+      `pagina 1 heeft label=${driePaginas.paginas[0].includes('Over te brengen')} pagina 2=${driePaginas.paginas[1].includes('Over te brengen')} pagina 3=${driePaginas.paginas[2].includes('Over te brengen')}`,
+    );
+  }
+
+  // De fragiele situatie uit de briefing: een regel die over twee tekstregels wrapt, ergens
+  // middenin de eerste pagina — precies waar meting en eindrender kunnen uiteenlopen.
+  const metWrap = await d10PerPaginaTekst(d10Fixture(90, { wrapRijIndex: 30 }), 3);
+  meld(
+    '6d. Wrappende regel: nog steeds exact drie pagina\'s, telling blijft kloppen',
+    metWrap.werkelijkAantalPaginas === 3 &&
+      metWrap.paginas.length === 3 &&
+      getalOpPagina(metWrap.paginas[2]) === 90 &&
+      metWrap.paginas[0].includes('Over te brengen') &&
+      !metWrap.paginas[2].includes('Over te brengen'),
+    `werkelijk aantal pagina's=${metWrap.werkelijkAantalPaginas}, eindtotaal=${metWrap.paginas[2] ? getalOpPagina(metWrap.paginas[2]) : 'n.v.t.'}`,
+  );
+
+  // Een document ZONDER de D-10-marker moet volledig ongemoeid blijven — geen enkele nieuwe
+  // stap raakt dit pad aan.
+  const zonderMarker = await genereer({ body: { html: FIXTURE } });
+  meld(
+    '6e. Document zonder data-hf-paginacumulatief: gewoon 200, ongewijzigd pad',
+    zonderMarker.status === 200,
+    `status=${zonderMarker.status}`,
+  );
 }
 
 main()
