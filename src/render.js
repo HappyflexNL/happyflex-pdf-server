@@ -1,6 +1,8 @@
 'use strict';
 
+const { PDFDocument } = require('pdf-lib');
 const { withTimeout } = require('./browser');
+const { pasPaginaCumulatiefToe, verifieerPaginaAantal } = require('./paginacumulatief');
 
 const MAX_FILENAME_LENGTH = 120;
 const FALLBACK_FILENAME = 'document';
@@ -64,7 +66,20 @@ async function renderPdf(browser, html, { timeoutMs }) {
           // Lettertypen tellen mee: zonder deze wachtslag rendert de PDF in een fallbackfont.
           return Promise.all([document.fonts.ready, ...afbeeldingen]);
         });
-        return page.pdf({ format: 'A4', printBackground: true, timeout: timeoutMs });
+
+        // D-10: alleen aangeraakt wanneer de HTML zelf om de per-pagina cumulatieve
+        // hoeveelheidsregel vraagt (`data-hf-paginacumulatief`). Geen marker → geen
+        // `emulateMediaType`-aanroep, geen meting, geen herbouw — byte-identiek aan vóór D-10.
+        const verwachtAantalPaginas = await pasPaginaCumulatiefToe(page);
+
+        const pdf = await page.pdf({ format: 'A4', printBackground: true, timeout: timeoutMs });
+
+        if (verwachtAantalPaginas !== null) {
+          const pdfDoc = await PDFDocument.load(pdf);
+          verifieerPaginaAantal(pdfDoc.getPageCount(), verwachtAantalPaginas);
+        }
+
+        return pdf;
       })(),
       timeoutMs,
       'render overschreed de timeout',
