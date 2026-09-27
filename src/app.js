@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const express = require('express');
 
 const { renderPdf, veiligeBestandsnaam } = require('./render');
+const { withTimeout } = require('./browser');
 
 const AUTH_HEADER = 'x-render-token';
 
@@ -82,9 +83,20 @@ function createApp({ config, browserManager, logger = console }) {
     try {
       browser = browserManager.get();
     } catch {
-      logger.error?.(`503 ${requestId} — browser niet beschikbaar`);
-      res.setHeader('Retry-After', String(config.retryAfterSeconds));
-      return fout(res, 503, 'browser_unavailable', 'Renderservice heeft op dit moment geen werkende browser.');
+      // De browser is er nu niet, maar zelfherstel loopt mogelijk al (backoff-timer of een
+      // launch in uitvoering). Eén korte, begrensde poging vóór we 503 geven: lukt de start
+      // binnen `browserStartWaitMs`, dan rendert dit request gewoon door.
+      try {
+        browser = await withTimeout(
+          browserManager.start(),
+          config.browserStartWaitMs,
+          'browser start duurde te lang',
+        );
+      } catch (error) {
+        logger.error?.(`503 ${requestId} — browser niet beschikbaar: ${error.message}`);
+        res.setHeader('Retry-After', String(config.retryAfterSeconds));
+        return fout(res, 503, 'browser_unavailable', 'Renderservice heeft op dit moment geen werkende browser.');
+      }
     }
 
     stats.inflight += 1;

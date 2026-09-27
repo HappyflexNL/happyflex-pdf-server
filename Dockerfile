@@ -10,6 +10,16 @@ ENV NODE_ENV=production \
 USER root
 WORKDIR /app
 
+# tini als PID 1. Zonder init is Node zelf PID 1 en reapt hij geen zombies: een weesproces van
+# Chrome (bijv. na een mislukte launch die zijn kind niet volledig kon opruimen) stapelt dan op
+# tot er geen nieuwe Chrome meer kan starten — exact "Timed out ... WS endpoint" uit het
+# incident. tini lost dat op systeemniveau op, ongeacht wat BrowserManager zelf al opruimt.
+# Gepind op exacte versie + sha256, gedownload met Node (geen extra apt-pakket nodig).
+ARG TARGETARCH
+COPY scripts/install-tini.js ./scripts/install-tini.js
+RUN TARGETARCH=${TARGETARCH} node scripts/install-tini.js \
+ && rm scripts/install-tini.js
+
 COPY package.json package-lock.json ./
 
 # De browser komt uit onze eigen gepinde puppeteer, niet uit het basisimage: dat pad is een
@@ -26,8 +36,12 @@ USER pptruser
 EXPOSE 3000
 
 # Coolify en Docker kijken hiernaar. /health is bewust ongeauthenticeerd en meldt de
-# browserstatus, niet alleen "express leeft".
+# browserstatus, niet alleen "express leeft". Blijft de container ondanks dit alles langdurig
+# unhealthy, dan grijpt Coolify/Docker hier zelf niet op in — vandaar dat BrowserManager na
+# BROWSER_MAX_UNHEALTHY_MS zelf process.exit(1) doet, zodat de restart-policy het proces
+# opnieuw start.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
   CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.PORT||3000)+'/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
+ENTRYPOINT ["/usr/local/bin/tini", "--"]
 CMD ["node", "pdf-server.js"]
