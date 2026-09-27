@@ -7,4 +7,5 @@ npm-debug.log
 !.env.example
 test
 scripts
+!scripts/install-tini.js
 README.md
