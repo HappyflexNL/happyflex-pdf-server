@@ -23,6 +23,12 @@ function nepBrowserManager({ ok = true, rendert = true } = {}) {
       if (!rendert) throw Object.assign(new Error('browser niet beschikbaar'), { code: 'BROWSER_UNAVAILABLE' });
       return nepBrowser();
     },
+    // Alleen bereikt wanneer get() hierboven mislukte: het /generate-pad probeert dan één
+    // keer start() binnen een korte wachttijd voor het 503 geeft.
+    async start() {
+      if (!rendert) throw new Error('browser niet beschikbaar');
+      return nepBrowser();
+    },
   };
 }
 
@@ -133,6 +139,70 @@ test('zonder werkende browser geeft /generate 503 met Retry-After', async () => 
     assert.equal(res.headers.get('retry-after'), '5');
     assert.equal((await res.json()).error, 'browser_unavailable');
   });
+});
+
+// ── Zelfherstel op het /generate-pad ──────────────────────────────────────────
+// Is de browser weg, dan probeert /generate één keer start() binnen een korte wachttijd
+// vóór het 503 geeft. Twee uitkomsten zijn geldig: het request rendert alsnog, of het krijgt
+// een nette 503 met Retry-After als de start niet op tijd lukt.
+
+test('(d) een request tijdens herstel rendert alsnog als de browser op tijd terugkomt', async () => {
+  const browserManager = {
+    async health() {
+      return { ok: false, state: 'herstartend', connected: false, pid: null, restarts: 1, last_error: 'weg', version: null };
+    },
+    get() {
+      throw Object.assign(new Error('browser niet beschikbaar'), { code: 'BROWSER_UNAVAILABLE' });
+    },
+    async start() {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return nepBrowser();
+    },
+  };
+
+  await metServer(browserManager, async (basis) => {
+    const res = await fetch(`${basis}/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-render-token': TOKEN },
+      body: JSON.stringify({ html: '<p>hallo</p>' }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'application/pdf');
+  });
+});
+
+test('(d) een request tijdens herstel krijgt 503 met Retry-After als de start te lang duurt', async () => {
+  const browserManager = {
+    async health() {
+      return { ok: false, state: 'herstartend', connected: false, pid: null, restarts: 1, last_error: 'weg', version: null };
+    },
+    get() {
+      throw Object.assign(new Error('browser niet beschikbaar'), { code: 'BROWSER_UNAVAILABLE' });
+    },
+    async start() {
+      // Langer dan BROWSER_START_WAIT_MS hieronder — de client moet niet blijven hangen.
+      await new Promise((resolve) => {
+        const t = setTimeout(resolve, 10_000);
+        t.unref?.();
+      });
+      return nepBrowser();
+    },
+  };
+
+  await metServer(
+    browserManager,
+    async (basis) => {
+      const res = await fetch(`${basis}/generate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-render-token': TOKEN },
+        body: JSON.stringify({ html: '<p>hallo</p>' }),
+      });
+      assert.equal(res.status, 503);
+      assert.equal(res.headers.get('retry-after'), '5');
+      assert.equal((await res.json()).error, 'browser_unavailable');
+    },
+    { BROWSER_START_WAIT_MS: '100' },
+  );
 });
 
 test('GET /health is ongeauthenticeerd en geeft 200 bij een gezonde browser', async () => {

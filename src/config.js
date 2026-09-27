@@ -37,6 +37,12 @@ function loadConfig(env = process.env) {
     retryAfterSeconds: readInt(env, 'RETRY_AFTER_SECONDS', 5, 1, 300),
     // Hoelang we bij SIGTERM op lopende renders wachten voor we hard afsluiten.
     shutdownGraceMs: readInt(env, 'SHUTDOWN_GRACE_MS', 15_000, 0, 120_000),
+    // Blijft de browser langer dan dit onafgebroken niet-gereed, dan geeft de service het op
+    // (process.exit(1)) zodat de restart-policy van de container overneemt.
+    browserMaxUnhealthyMs: readInt(env, 'BROWSER_MAX_UNHEALTHY_MS', 3 * 60 * 1000, 10_000, 3_600_000),
+    // Hoe lang een inkomend request wacht op een browserstart die al bezig is, voor het opgeeft
+    // met 503. Kort, want de client krijgt toch al een Retry-After mee.
+    browserStartWaitMs: readInt(env, 'BROWSER_START_WAIT_MS', 3_000, 100, 30_000),
   };
 }
 

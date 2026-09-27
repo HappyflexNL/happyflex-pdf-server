@@ -70,6 +70,8 @@ boot, niet bij het eerste request.
 | `MAX_CONCURRENT_RENDERS` | `2` | Daarboven direct `503`, geen wachtrij |
 | `RETRY_AFTER_SECONDS` | `5` | Waarde van de `Retry-After`-header |
 | `SHUTDOWN_GRACE_MS` | `15000` | Wachttijd op lopende renders bij `SIGTERM` |
+| `BROWSER_MAX_UNHEALTHY_MS` | `180000` | Blijft de browser onafgebroken niet-gereed langer dan dit, dan stopt de service zichzelf (`process.exit(1)`) |
+| `BROWSER_START_WAIT_MS` | `3000` | Hoe lang een `/generate`-request wacht op een browserstart voor het 503 geeft |
 
 Genereer het secret met `openssl rand -hex 32` en zet hem in Coolify-env — **nooit in deze
 repo**.
@@ -87,6 +89,31 @@ repo**.
   niet, waardoor renders willekeurig in de timeout liepen terwijl de pagina allang klaar was.
 - **Géén `--disable-gpu`.** Met die vlag vuurde `networkidle0` helemaal niet meer. Gemeten,
   niet aangenomen.
+
+## Wat als de browser crasht
+
+Valt Chromium weg — een crash, een OOM-kill, of een herstart die zelf mislukt (bijv. een
+time-out op de WS-endpoint) — dan geeft de service het niet na één poging op. `BrowserManager`
+blijft zelf herstarten met oplopende backoff (0, 0,5, 2, 5, 10, 30, 60 s en dan elke 60 s door),
+ook als een herstartpoging zelf faalt. Vóór elke nieuwe poging wordt een eventueel
+achtergebleven browserproces van de vorige poging opgeruimd.
+
+- **`/health` meldt intussen `503`** (browser.state `herstartend`), zodat de orchestrator weet
+  dat er iets mis is — maar Docker/Coolify herstarten een "unhealthy" container niet
+  vanzelf, ze laten hem alleen als zodanig zien.
+- **Komt er een `/generate`-request binnen terwijl de browser weg is**, dan probeert de service
+  één keer `start()` binnen `BROWSER_START_WAIT_MS`. Lukt dat, dan rendert het request gewoon
+  door; lukt het niet op tijd, dan volgt `503` met `Retry-After` — de client hoeft niet te
+  wachten tot de volledige backoff-cyclus voorbij is.
+- **Blijft de browser onafgebroken niet-gereed langer dan `BROWSER_MAX_UNHEALTHY_MS`** (standaard
+  3 minuten), dan is er kennelijk geen redden meer aan binnen dit proces. De service logt dat
+  duidelijk en doet zelf `process.exit(1)`, zodat de restart-policy van de container het proces
+  opnieuw start — dát is het mechanisme waarmee Docker/Coolify uiteindelijk wél ingrijpen.
+- **`tini` draait als PID 1** in het image (niet Node zelf), zodat weesprocessen van Chrome na
+  een mislukte start worden opgeruimd. Zonder init-proces stapelen die processen op tot er geen
+  nieuwe Chrome meer kan starten.
+- Alle logregels krijgen een ISO-tijdstempel, zodat een incident achteraf op een tijdlijn te
+  zetten is.
 
 ## Beveiliging
 
