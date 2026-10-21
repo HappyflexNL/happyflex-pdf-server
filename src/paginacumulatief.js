@@ -166,7 +166,7 @@ async function herbouwMetChunks(page, chunksPerTabel) {
       let rijCursor = 0;
       const nieuweTabellen = chunks.map((chunk, chunkIndex) => {
         const nieuw = document.createElement('table');
-        nieuw.className = tabel.className;
+        nieuw.className = `${tabel.className} hf-chunk`.trim();
         if (chunkIndex > 0) nieuw.style.breakBefore = 'page';
         if (colgroup) nieuw.appendChild(colgroup.cloneNode(true));
         nieuw.appendChild(thead.cloneNode(true));
@@ -200,8 +200,15 @@ async function herbouwMetChunks(page, chunksPerTabel) {
  * minstens één chunk zijn eigen pagina niet gehaald en klopt de cumulatieve telling niet meer.
  * Een verkeerd getal op een factuur is erger dan geen PDF: harde fout, geen document teruggeven.
  */
-function verifieerPaginaAantal(werkelijkAantalPaginas, verwachtAantalPaginas) {
-  if (werkelijkAantalPaginas !== verwachtAantalPaginas) {
+function verifieerPaginaAantal(werkelijkAantalPaginas, verwachtAantalPaginas, { naTabelInhoud = false } = {}) {
+  // Staat er inhoud NA de laatste gemarkeerde tabel (totalen, betaalgegevens), dan mag die op
+  // extra pagina's belanden: die horen niet bij de chunk-telling. Dan is alleen "minder pagina's
+  // dan chunks" een fout; of elke chunk binnen zijn pagina past is al in `pasPaginaCumulatiefToe`
+  // aan de hand van de herbouwde tabelhoogtes gecontroleerd.
+  const afwijking = naTabelInhoud
+    ? werkelijkAantalPaginas < verwachtAantalPaginas
+    : werkelijkAantalPaginas !== verwachtAantalPaginas;
+  if (afwijking) {
     throw new Error(
       `D-10-verificatie mislukt: verwachtte ${verwachtAantalPaginas} pagina('s) na de cumulatieve herberekening, kreeg ${werkelijkAantalPaginas}. ` +
         'Meting en eindrender lopen uiteen (mogelijk een regel die net wel/niet wrapt) — geen PDF teruggegeven.',
@@ -210,7 +217,7 @@ function verifieerPaginaAantal(werkelijkAantalPaginas, verwachtAantalPaginas) {
 }
 
 /**
- * Past de volledige D-10-stap toe: detecteren, meten, chunken, herbouwen. Geeft het TOTAAL aantal
+ * Past de volledige D-10-stap toe: detecteren, meten, chunken, herbouwen. Geeft `{ verwachtAantalPaginas, naTabelInhoud }` terug: het TOTAAL aantal
  * verwachte pagina's terug (som over alle gemarkeerde tabellen plus 1 als er geen marker was,
  * puur voor de verificatiestap na `page.pdf()`) — of `null` als er niets te doen viel.
  */
@@ -241,7 +248,35 @@ async function pasPaginaCumulatiefToe(page) {
   // Vandaag draagt een factuur/zelffactuur precies één gemarkeerde tabel; de som is toekomstvast
   // voor het geval dat ooit verandert, zonder een aanname over "precies één" hard te coderen.
   const verwachtAantalPaginas = chunksPerTabel.reduce((som, chunks) => som + chunks.length, 0);
-  return verwachtAantalPaginas;
+
+  const { naTabelInhoud, maxChunkHoogte } = await meetNaHerbouw(page);
+  const grootsteHerhalend = Math.max(...metingen.map((m) => m.buitenTheadHoogte));
+  if (maxChunkHoogte > BRUIKBARE_HOOGTE_PX - grootsteHerhalend) {
+    throw new Error(
+      `D-10: een herbouwde chunk (${maxChunkHoogte}px) past niet binnen één pagina (${BRUIKBARE_HOOGTE_PX - grootsteHerhalend}px) — geen PDF teruggegeven.`,
+    );
+  }
+  return { verwachtAantalPaginas, naTabelInhoud };
+}
+
+/**
+ * Meet na het herbouwen (zelfde print-layout): de hoogte van de grootste herbouwde chunk, en of
+ * er zichtbare inhoud NA de laatste gemarkeerde tabel staat (die kan extra pagina's opleveren
+ * zonder dat een chunk overloopt).
+ */
+async function meetNaHerbouw(page) {
+  return page.evaluate(() => {
+    const chunks = [...document.querySelectorAll('table.hf-chunk')];
+    const laatste = chunks[chunks.length - 1];
+    const maxChunkHoogte = Math.max(0, ...chunks.map((t) => t.getBoundingClientRect().height));
+    const laatsteOnder = laatste ? laatste.getBoundingClientRect().bottom : 0;
+    const naTabelInhoud = [...document.body.querySelectorAll('*')].some((el) => {
+      if (!laatste || el.contains(laatste) || laatste.contains(el)) return false;
+      const r = el.getBoundingClientRect();
+      return r.height > 0 && r.top >= laatsteOnder - 0.5;
+    });
+    return { naTabelInhoud, maxChunkHoogte };
+  });
 }
 
 module.exports = { pasPaginaCumulatiefToe, verifieerPaginaAantal, berekenChunks, BRUIKBARE_HOOGTE_PX };

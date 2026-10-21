@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { berekenChunks } = require('../src/paginacumulatief');
+const { berekenChunks, verifieerPaginaAantal } = require('../src/paginacumulatief');
 
 function rij(hoogte, aantal = 1) {
   return { hoogte, aantal };
@@ -73,4 +73,43 @@ test('berekenChunks: niet-positieve capaciteit (kopinhoud groter dan de pagina) 
 test('berekenChunks: lege rijenlijst levert geen chunks (geen NaN, geen crash)', () => {
   const chunks = berekenChunks(basisMeting({ rijen: [] }));
   assert.deepEqual(chunks, []);
+});
+
+test('verifieerPaginaAantal: zonder inhoud na de tabel is elk verschil een harde fout', () => {
+  assert.doesNotThrow(() => verifieerPaginaAantal(2, 2));
+  assert.throws(() => verifieerPaginaAantal(3, 2), /D-10-verificatie/);
+  assert.throws(() => verifieerPaginaAantal(1, 2), /D-10-verificatie/);
+});
+
+test('verifieerPaginaAantal: inhoud na de tabel (totalen/betaalgegevens) mag extra pagina\'s geven, minder blijft fout', () => {
+  // Spoedfactuur: 12 regels = 1 chunk, maar het blok na de tabel liep door naar pagina 2.
+  assert.doesNotThrow(() => verifieerPaginaAantal(2, 1, { naTabelInhoud: true }));
+  assert.throws(() => verifieerPaginaAantal(1, 2, { naTabelInhoud: true }), /D-10-verificatie/);
+});
+
+// Echte Chromium: factuurvorm met een tabel van 12 regels en veel inhoud erná. Vóór de correctie
+// gaf dit D-10-verificatie "verwachtte 1 pagina, kreeg 2" → HTTP 500 render_failed.
+test('renderPdf: 12 regels met lang slotblok na de tabel geeft een PDF (geen 500)', async (t) => {
+  const puppeteer = require('puppeteer');
+  const { renderPdf } = require('../src/render');
+  let browser;
+  try {
+    browser = await puppeteer.launch({ args: ['--no-sandbox'] });
+  } catch {
+    return t.skip('geen Chromium beschikbaar');
+  }
+  try {
+    const rijen = Array.from(
+      { length: 12 },
+      (_, i) => `<tr data-hf-aantal="8"><td>8</td><td>uur</td><td>Testpersoon week ${i + 1} Testschool</td></tr>`,
+    ).join('');
+    const slot = Array.from({ length: 25 }, (_, i) => `<p style="margin:0;height:10mm">Totaalregel ${i}</p>`).join('');
+    const html = `<!doctype html><html><head><style>@page{size:A4;margin:20mm}body{margin:0;font:9pt Arial}table.regeltabel{width:100%;border-collapse:collapse}</style></head><body>
+<table class="regeltabel" data-hf-paginacumulatief><thead><tr><th>Aantal</th><th>Eenheid</th><th>Omschrijving</th></tr></thead><tbody>${rijen}</tbody>
+<tfoot><tr data-hf-cumulatief-kolom="0" data-hf-label-kolom="2" data-hf-label="Over te brengen"><td>0</td><td>uren</td><td></td></tr></tfoot></table>${slot}</body></html>`;
+    const pdf = await renderPdf(browser, html, { timeoutMs: 20000 });
+    assert.equal(Buffer.from(pdf).subarray(0, 4).toString(), '%PDF');
+  } finally {
+    await browser.close();
+  }
 });
