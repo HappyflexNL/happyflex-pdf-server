@@ -70,13 +70,15 @@ async function renderPdf(browser, html, { timeoutMs }) {
         // D-10: alleen aangeraakt wanneer de HTML zelf om de per-pagina cumulatieve
         // hoeveelheidsregel vraagt (`data-hf-paginacumulatief`). Geen marker → geen
         // `emulateMediaType`-aanroep, geen meting, geen herbouw — byte-identiek aan vóór D-10.
-        const verwachtAantalPaginas = await pasPaginaCumulatiefToe(page);
+        const paginaCumulatief = await pasPaginaCumulatiefToe(page);
 
         const pdf = await page.pdf({ format: 'A4', printBackground: true, timeout: timeoutMs });
 
-        if (verwachtAantalPaginas !== null) {
+        if (paginaCumulatief !== null) {
           const pdfDoc = await PDFDocument.load(pdf);
-          verifieerPaginaAantal(pdfDoc.getPageCount(), verwachtAantalPaginas);
+          verifieerPaginaAantal(pdfDoc.getPageCount(), paginaCumulatief.verwachtAantalPaginas, {
+            naTabelInhoud: paginaCumulatief.naTabelInhoud,
+          });
         }
 
         return pdf;
