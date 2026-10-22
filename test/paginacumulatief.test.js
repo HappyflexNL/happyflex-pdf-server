@@ -113,3 +113,53 @@ test('renderPdf: 12 regels met lang slotblok na de tabel geeft een PDF (geen 500
     await browser.close();
   }
 });
+
+test('berekenChunks: een herhalende paginaraster-voet (SNA-voet) verkleint de capaciteit van élke pagina', () => {
+  const rijen = Array.from({ length: 80 }, () => rij(30));
+  const zonderVoet = berekenChunks(basisMeting({ rijen }));
+  const metVoet = berekenChunks(basisMeting({ rijen, buitenTfootHoogte: 120 }));
+  assert.ok(metVoet[0].aantalRijen < zonderVoet[0].aantalRijen);
+  assert.ok(metVoet[1].aantalRijen < zonderVoet[1].aantalRijen);
+  assert.equal(metVoet.at(-1).cumulatiefTotaal, 80);
+});
+
+// Echte Chromium: factuurvorm met een herhalende paginaraster-kop én -voet (factuur 202600036,
+// NEN 4400/SNA-voet). Vóór de correctie telde D-10 de voet niet mee: een chunk liep over naar een
+// extra pagina (verkeerd "Over te brengen"-getal) en de strikte paginacontrole — geen inhoud na
+// de tabel — weigerde de PDF ("verwachtte N pagina('s), kreeg N+1").
+test('D-10 in Chromium: paginaraster met herhalende voet → elke chunk precies op zijn eigen pagina', async (t) => {
+  const puppeteer = require('puppeteer');
+  const { PDFDocument } = require('pdf-lib');
+  const { pasPaginaCumulatiefToe } = require('../src/paginacumulatief');
+  let browser;
+  try {
+    browser = await puppeteer.launch({ args: ['--no-sandbox'] });
+  } catch {
+    return t.skip('geen Chromium beschikbaar');
+  }
+  try {
+    const rijen = Array.from(
+      { length: 30 },
+      (_, i) => `<tr data-hf-aantal="8"><td>8</td><td>uur</td><td>Testpersoon dag ${i + 1}</td></tr>`,
+    ).join('');
+    const html = `<!doctype html><html><head><style>@page{size:A4;margin:20mm}body{margin:0;font:9pt Arial}
+table{width:100%;border-collapse:collapse}td{padding:2mm 0}table.factuur-paginaraster>thead{display:table-header-group}
+table.factuur-paginaraster>tfoot{display:table-footer-group}.kop{height:15mm}.voet{height:40mm}.eenmalig{height:60mm}</style></head><body>
+<table class="factuur-paginaraster"><thead><tr><td class="kop">logo</td></tr></thead><tfoot><tr><td class="voet">SNA-voet</td></tr></tfoot><tbody><tr><td>
+<div class="eenmalig">kop pagina 1</div>
+<table class="regeltabel" data-hf-paginacumulatief><thead><tr><th>Aantal</th><th>Eenheid</th><th>Omschrijving</th></tr></thead><tbody>${rijen}</tbody>
+<tfoot><tr data-hf-cumulatief-kolom="0" data-hf-label-kolom="2" data-hf-label="Over te brengen"><td>0</td><td>uren</td><td></td></tr></tfoot></table>
+</td></tr></tbody></table></body></html>`;
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'load' });
+    const { verwachtAantalPaginas, naTabelInhoud } = await pasPaginaCumulatiefToe(page);
+    const paginas = (await PDFDocument.load(await page.pdf({ format: 'A4', printBackground: true }))).getPageCount();
+    assert.ok(verwachtAantalPaginas >= 2, `verwachtte een meerpaginadocument, kreeg ${verwachtAantalPaginas} chunk(s)`);
+    // Eén pagina per chunk: anders staat een "Over te brengen"-getal op de verkeerde pagina.
+    assert.equal(paginas, verwachtAantalPaginas);
+    // De herhalende paginavoet is geen inhoud ná de tabel; de strikte paginacontrole blijft gelden.
+    assert.equal(naTabelInhoud, false);
+  } finally {
+    await browser.close();
+  }
+});
