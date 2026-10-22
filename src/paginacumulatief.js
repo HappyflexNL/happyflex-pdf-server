@@ -49,8 +49,8 @@ async function heeftPaginacumulatieveTabel(page) {
 
 /**
  * Meet, voor elke gemarkeerde tabel, alles wat nodig is om te bepalen welke rij op welke pagina
- * landt: de hoogte van wat er per pagina herhaalt (een omhullende paginaraster-`<thead>`, indien
- * aanwezig, plus de tabel-eigen `<thead>` en `<tfoot>`), de eenmalige koptekst die alleen op de
+ * landt: de hoogte van wat er per pagina herhaalt (een omhullende paginaraster-`<thead>` en
+ * -`<tfoot>`, indien aanwezig, plus de tabel-eigen `<thead>` en `<tfoot>`), de eenmalige koptekst die alleen op de
  * eerste pagina meetelt (alles tussen die twee koppen — afzender/titel/gegevensblok e.d.), en per
  * rij zijn hoogte plus zijn `data-hf-aantal`-bijdrage.
  */
@@ -62,6 +62,10 @@ async function meetTabellen(page) {
       const tfootRij = tabel.querySelector(':scope > tfoot > tr');
       const paginaraster = tabel.closest('table.factuur-paginaraster');
       const buitenThead = paginaraster ? paginaraster.querySelector(':scope > thead') : null;
+      // De paginavoet van het raster (factuur 202600036: NEN 4400/SNA-voet) herhaalt net als de
+      // kop op élke pagina en neemt daar ruimte in. Niet meetellen = chunks die hun pagina
+      // overlopen, met een verkeerd "Over te brengen"-getal als gevolg.
+      const buitenTfoot = paginaraster ? paginaraster.querySelector(':scope > tfoot') : null;
 
       const theadRect = thead.getBoundingClientRect();
       const buitenRect = buitenThead ? buitenThead.getBoundingClientRect() : null;
@@ -75,6 +79,7 @@ async function meetTabellen(page) {
       return {
         theadHoogte: theadRect.height,
         buitenTheadHoogte: buitenRect ? buitenRect.height : 0,
+        buitenTfootHoogte: buitenTfoot ? buitenTfoot.getBoundingClientRect().height : 0,
         tfootHoogte: tfootRect.height,
         // Alles tussen het eind van de buitenste (herhalende) kop en het begin van de tabel-eigen
         // kop — bestaat alleen op pagina 1 (afzender/ontvanger/titel/gegevensblok e.d.).
@@ -88,6 +93,11 @@ async function meetTabellen(page) {
   });
 }
 
+/** Wat het omhullende paginaraster op élke pagina inneemt: zijn kop plus zijn voet. */
+function rasterHerhalend(meting) {
+  return meting.buitenTheadHoogte + (meting.buitenTfootHoogte ?? 0);
+}
+
 /**
  * Groepeert rijen in pagina-chunks (greedy: vul een pagina tot de volgende rij niet meer past),
  * en berekent per chunk het cumulatieve `aantal` tot en met die chunk. Pagina 1 heeft minder
@@ -98,7 +108,7 @@ async function meetTabellen(page) {
  *   paginabreukvraagstuk).
  */
 function berekenChunks(meting) {
-  const herhalend = meting.buitenTheadHoogte + meting.theadHoogte + meting.tfootHoogte;
+  const herhalend = rasterHerhalend(meting) + meting.theadHoogte + meting.tfootHoogte;
   const capaciteitPagina1 = BRUIKBARE_HOOGTE_PX - herhalend - meting.eenmaligeKopHoogte;
   const capaciteitVervolgpagina = BRUIKBARE_HOOGTE_PX - herhalend;
 
@@ -249,18 +259,21 @@ async function pasPaginaCumulatiefToe(page) {
   // voor het geval dat ooit verandert, zonder een aanname over "precies één" hard te coderen.
   const verwachtAantalPaginas = chunksPerTabel.reduce((som, chunks) => som + chunks.length, 0);
 
-  const { naTabelInhoud, maxChunkHoogte } = await meetNaHerbouw(page);
-  const grootsteHerhalend = Math.max(...metingen.map((m) => m.buitenTheadHoogte));
-  if (maxChunkHoogte > BRUIKBARE_HOOGTE_PX - grootsteHerhalend) {
+  const { naTabelInhoud, chunkHoogtes } = await meetNaHerbouw(page);
+  const beschikbaar = BRUIKBARE_HOOGTE_PX - Math.max(...metingen.map(rasterHerhalend));
+  // De eerste chunk deelt pagina 1 met de eenmalige kop (afzender/titel/gegevensblok).
+  const eersteChunk = (chunkHoogtes[0] ?? 0) + (metingen[0]?.eenmaligeKopHoogte ?? 0);
+  const grootste = Math.max(eersteChunk, ...chunkHoogtes.slice(1));
+  if (grootste > beschikbaar + 0.5) {
     throw new Error(
-      `D-10: een herbouwde chunk (${maxChunkHoogte}px) past niet binnen één pagina (${BRUIKBARE_HOOGTE_PX - grootsteHerhalend}px) — geen PDF teruggegeven.`,
+      `D-10: een herbouwde chunk (${grootste}px) past niet binnen één pagina (${beschikbaar}px) — geen PDF teruggegeven.`,
     );
   }
   return { verwachtAantalPaginas, naTabelInhoud };
 }
 
 /**
- * Meet na het herbouwen (zelfde print-layout): de hoogte van de grootste herbouwde chunk, en of
+ * Meet na het herbouwen (zelfde print-layout): de hoogte van elke herbouwde chunk, en of
  * er zichtbare inhoud NA de laatste gemarkeerde tabel staat (die kan extra pagina's opleveren
  * zonder dat een chunk overloopt).
  */
@@ -268,14 +281,16 @@ async function meetNaHerbouw(page) {
   return page.evaluate(() => {
     const chunks = [...document.querySelectorAll('table.hf-chunk')];
     const laatste = chunks[chunks.length - 1];
-    const maxChunkHoogte = Math.max(0, ...chunks.map((t) => t.getBoundingClientRect().height));
+    const chunkHoogtes = chunks.map((t) => t.getBoundingClientRect().height);
     const laatsteOnder = laatste ? laatste.getBoundingClientRect().bottom : 0;
     const naTabelInhoud = [...document.body.querySelectorAll('*')].some((el) => {
       if (!laatste || el.contains(laatste) || laatste.contains(el)) return false;
+      // Kop en voet van het paginaraster herhalen op elke pagina; dat is geen inhoud ná de tabel.
+      if (el.closest('table.factuur-paginaraster > thead, table.factuur-paginaraster > tfoot')) return false;
       const r = el.getBoundingClientRect();
       return r.height > 0 && r.top >= laatsteOnder - 0.5;
     });
-    return { naTabelInhoud, maxChunkHoogte };
+    return { naTabelInhoud, chunkHoogtes };
   });
 }
 
