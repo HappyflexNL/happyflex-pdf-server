@@ -1,0 +1,39 @@
+name: bouwen
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: pdf-bouwen-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  bouwen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Bouw het werkelijke PDF-image
+        run: docker build --pull --tag happyflex-pdf-bouwproef .
+      - name: Start een afzonderlijke proefcontainer zonder openbare poort
+        run: |
+          docker run --detach --init --name pdf-bouwproef --user root --entrypoint sleep \
+            --mount "type=bind,source=$PWD/test,target=/app/test,readonly" \
+            --mount "type=bind,source=$PWD/scripts/acceptance.mjs,target=/app/scripts/acceptance.mjs,readonly" \
+            happyflex-pdf-bouwproef infinity
+          docker exec pdf-bouwproef sh -ec 'apt-get update -qq && apt-get install -y --no-install-recommends poppler-utils'
+          docker network disconnect bridge pdf-bouwproef
+      - name: Bestaande tests met de runtimegebruiker
+        run: docker exec --user pptruser pdf-bouwproef npm test
+      - name: Echte PDF- en toegangsproeven met fictieve gegevens
+        run: docker exec --user pptruser pdf-bouwproef node scripts/acceptance.mjs
+      - name: Ruim uitsluitend de eigen proefcontainer op
+        if: always()
+        run: |
+          if docker container inspect pdf-bouwproef >/dev/null 2>&1; then
+            docker rm --force pdf-bouwproef
+          fi
