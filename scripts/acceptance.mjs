@@ -162,10 +162,19 @@ async function main() {
   );
 
   const tijdensHerstelRender = await genereer();
+  // Contract (src/app.js): het request wacht begrensd op de browserstart. Geldig is dus óf een
+  // echte PDF (200, herstel binnen de wachttijd) óf 503 met Retry-After. Hang/500/ongeldige PDF niet.
+  const retryAfter = tijdensHerstelRender.headers.get('retry-after');
+  const herstelBytes = Buffer.from(await tijdensHerstelRender.arrayBuffer());
+  const geldigeHerstelPdf =
+    tijdensHerstelRender.status === 200 &&
+    tijdensHerstelRender.headers.get('content-type')?.includes('application/pdf') &&
+    herstelBytes.subarray(0, 4).toString() === '%PDF';
+  const nette503 = tijdensHerstelRender.status === 503 && Number(retryAfter) > 0;
   meld(
-    '4c. Tijdens herstel geeft /generate 503, geen stilstand',
-    tijdensHerstelRender.status === 503,
-    `status=${tijdensHerstelRender.status} retry-after=${tijdensHerstelRender.headers.get('retry-after')}`,
+    '4c. Tijdens herstel: geldige PDF (200) of 503 met Retry-After, geen hang/500',
+    geldigeHerstelPdf || nette503,
+    `status=${tijdensHerstelRender.status} retry-after=${retryAfter} bytes=${herstelBytes.length}`,
   );
 
   const hersteld = await wachtTot(async () => (await health()).status === 200, { timeoutMs: 30_000 });
