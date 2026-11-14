@@ -1,7 +1,7 @@
 # Basisimage gepind op exact dezelfde versie als de puppeteer-dependency in package.json.
 # Geen `latest`, geen range: de browser is hier de zwaarste afhankelijkheid en een stille
 # minor-sprong is precies wat een renderservice onvoorspelbaar maakt.
-FROM ghcr.io/puppeteer/puppeteer:25.6.0
+FROM ghcr.io/puppeteer/puppeteer:25.17.0
 
 ENV NODE_ENV=production \
     PORT=3000 \

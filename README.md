@@ -144,7 +144,7 @@ node scripts/acceptance.mjs     # volledige acceptatie tegen een echte browser (
 
 ## Versies
 
-Puppeteer én het basisimage staan op **exact 25.6.0**, zonder range. De browser is de
+Puppeteer én het basisimage staan op **exact 25.17.0**, zonder range. De browser is de
 zwaarste afhankelijkheid hier; een stille minor-sprong is precies wat een renderservice
 onvoorspelbaar maakt. De browser komt uit onze eigen gepinde puppeteer (`PUPPETEER_CACHE_DIR`
 in `/app`), niet uit het basisimage — dat pad is een eigenschap van het image en geen

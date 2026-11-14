@@ -12,8 +12,8 @@
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "express": "4.22.2",
+    "express": "4.22.3",
     "pdf-lib": "^1.17.1",
-    "puppeteer": "25.6.0"
+    "puppeteer": "25.17.0"
   }
 }
